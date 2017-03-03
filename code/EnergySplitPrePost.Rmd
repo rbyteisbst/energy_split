@@ -17,7 +17,7 @@ library(stringr)
 PrePost <- '2016-05-01'
 str_c("Split Date: ",PrePost)
 
-export <- read_csv("~/R/energy_split/data/ami_daily_2017-02-27.csv")
+export <- read_csv("../data/ami_daily_2017-02-27.csv")
 export$date <- as.Date(floor_date(ymd_hms(export$UTC_START_TIME,tz="America/New_York"),unit="days"))
 export <- export %>% 
   select(-X1) 
@@ -25,7 +25,7 @@ export <- export %>%
 export <- filter(export,date >= ymd(PrePost)-365)
 export <- within(export, {    TimePeriod = ifelse(date < PrePost , "Pre", "Post") })
 
-weather <- read_csv("~/R/energy_split/data/recentdatedweather.csv", 
+weather <- read_csv("../data/recentdatedweather.csv", 
     col_types = cols(CDD = col_double(), 
         DryBulb = col_double(), HDD = col_double()))
 weather$date <- as.Date(ymd(weather$WeatherDate,tz="America/New_York"))

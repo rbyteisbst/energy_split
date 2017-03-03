@@ -11,13 +11,13 @@ library(broom)
 library(DT)
 
 #pull in energy data
-export <- read_csv("~/R/energy_split/data/ami_daily_2017-02-27.csv")
+export <- read_csv("../data/ami_daily_2017-02-27.csv")
 export$date <- as.Date(floor_date(ymd_hms(export$UTC_START_TIME,tz="America/New_York"),unit="days"))
 export <- export %>% 
   select(-X1) %>% 
   filter(date > '2016-01-01') # in this case habits changed around then, but there are no date limits for this, can have an issue if usage only increases or decreases with temperature, then it will throw an error when trying to split into both "heating" and "cooling"
 
-weather <- read_csv("~/R/energy_split/data/recentdatedweather.csv", 
+weather <- read_csv("../data/recentdatedweather.csv", 
     col_types = cols(CDD = col_double(), 
         DryBulb = col_double(), HDD = col_double()))
 weather$date <- as.Date(ymd(weather$WeatherDate,tz="America/New_York"))
@@ -73,7 +73,7 @@ Based on the above setpoint, TMY 3 has these HDDs and CDDs:
 
 ```{r HDDCDD,echo=FALSE}
 
-TMY3 <- read_csv("~/R/energy_split/data/TMY3.CSV")
+TMY3 <- read_csv("../data/TMY3.CSV")
 
 #create HDD/CDD for TMY3 based on above setpoint
 TMY3summary <- TMY3 %>% 
