@@ -1,0 +1,54 @@
+---
+title: "Pre/Post Split"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+This attempts to split usage into pre- and post- buckets
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(DT)
+library(stringr)
+
+#variables
+PrePost <- '2016-05-01'
+str_c("Split Date: ",PrePost)
+
+export <- read_csv("~/R/energy_split/data/ami_daily_2017-02-27.csv")
+export$date <- as.Date(floor_date(ymd_hms(export$UTC_START_TIME,tz="America/New_York"),unit="days"))
+export <- export %>% 
+  select(-X1) 
+
+export <- filter(export,date >= ymd(PrePost)-365)
+export <- within(export, {    TimePeriod = ifelse(date < PrePost , "Pre", "Post") })
+
+weather <- read_csv("~/R/energy_split/data/recentdatedweather.csv", 
+    col_types = cols(CDD = col_double(), 
+        DryBulb = col_double(), HDD = col_double()))
+weather$date <- as.Date(ymd(weather$WeatherDate,tz="America/New_York"))
+weather <- weather %>% 
+  select(-X1)
+
+datatable(export %>% group_by(month = month(date,label=T),TimePeriod) %>% summarise(avgDailyUsage = mean(USAGE)) %>% spread(TimePeriod,avgDailyUsage))
+
+export %>% group_by(month = month(date,label=T),TimePeriod) %>% summarise(avgDailyUsage = mean(USAGE)) %>% ggplot(aes(month,avgDailyUsage,colour = TimePeriod,group=TimePeriod))+geom_point()+geom_line()
+
+```
+
+Let's see if Temperature played a part
+```{r,echo=FALSE}
+exportWeather <- merge(export,weather)
+exportWeather %>% group_by(month = month(date,label=T),TimePeriod) %>% summarise(avgDailyTemperature = mean(DryBulb)) %>% ggplot(aes(month,avgDailyTemperature,colour = TimePeriod,group=TimePeriod))+geom_point()+geom_line()
+
+
+```
+
+Combine Temperature and Usage
+
+```{r,echo=FALSE}
+exportWeather %>% group_by(month = month(date,label=T),TimePeriod) %>% summarise(avgDailyUsage = mean(USAGE),avgDailyTemperature = mean(DryBulb)) %>%  ggplot(aes(avgDailyTemperature,avgDailyUsage,colour = TimePeriod,group=TimePeriod,label=month))+geom_point()+geom_line()+geom_label()
+```
+

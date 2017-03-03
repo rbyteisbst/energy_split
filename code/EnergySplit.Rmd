@@ -1,0 +1,116 @@
+---
+title: "EnergySplit"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(broom)
+library(DT)
+
+export <- read_csv("~/R/energy_split/data/ami_daily_2017-02-27.csv")
+export$date <- as.Date(floor_date(ymd_hms(export$UTC_START_TIME,tz="America/New_York"),unit="days"))
+export <- export %>% 
+  select(-X1) %>% 
+  filter(date > '2016-01-01')
+
+weather <- read_csv("~/R/energy_split/data/recentdatedweather.csv", 
+    col_types = cols(CDD = col_double(), 
+        DryBulb = col_double(), HDD = col_double()))
+weather$date <- as.Date(ymd(weather$WeatherDate,tz="America/New_York"))
+weather <- weather %>% 
+  select(-X1)
+
+export <- inner_join(export,weather, c("date"="date"))
+
+```
+
+## Usage v. Temperature
+
+Having a variable for month of year or amount of sunshine would be more ideal.
+
+```{r chart,echo=FALSE}
+ggplot(export,aes(DryBulb,USAGE))+geom_point()+geom_rug(alpha=.3)+geom_smooth()
+```
+
+## Determine Setpoint
+
+The setpoint is determined by the temperature at the lowest value in the above chart. The assumed setpoint is:
+
+```{r setpoint,echo=FALSE}
+p<-ggplot(export,aes(DryBulb,USAGE)) + geom_smooth()
+model_data <- ggplot_build(p)$data[[1]][,1:5] 
+setpoint <- model_data[order(model_data$y),][[1]][1]
+setpoint
+```
+
+## (Re)Calculate HDD & CDD
+
+Then, run the ol' linear model.
+
+```{r lm,echo=FALSE}
+export$HDD = ifelse(export$DryBulb > setpoint, 0, setpoint - export$DryBulb)
+export$CDD = ifelse(export$DryBulb < setpoint, 0, export$DryBulb - setpoint)
+digits <- tidy(lm(USAGE ~ HDD + CDD, export))[[2]]
+datatable(tidy(lm(USAGE ~ HDD + CDD, export)), options = list(dom = 't'))
+datatable(glance(lm(USAGE ~ HDD + CDD, export)), options = list(dom = 't'))
+```
+
+
+## Now Normalize for Typical Meterological Year 3
+
+Based on the above setpoint, TMY 3 has these HDDs and CDDs:
+
+```{r HDDCDD,echo=FALSE}
+TMY3 <- read_csv("~/R/energy_split/data/TMY3.CSV")
+
+TMY3summary <- TMY3 %>% 
+  mutate(HDH = ifelse(Fdg < setpoint,setpoint - Fdg,0),CDH = ifelse(Fdg > setpoint,Fdg - setpoint,0)) %>% 
+  summarise(HDD = sum(HDH)/24,CDD = sum(CDH)/24)
+
+TMY3summary
+```
+
+Which, given our fit above leads to the following breakout (yearly load on top, percentage of total load on the bottom):
+
+```{r breakout,echo=FALSE}
+usage <- data.frame(digits[1] * 365)
+colnames(usage)[1] <- 'Baseload'
+usage$HeatingLoad <- digits[2] * TMY3summary[[1]]
+usage$CoolingLoad <- digits[3] * TMY3summary[[2]]
+datatable(rbind(usage,usage/sum(usage[1:3])), options = list(dom = 't'))
+```
+
+## Usage Charts
+
+Actual Daily Usage:
+
+```{r Actual,echo=FALSE}
+
+ggplot(export,aes(date,USAGE)) + geom_point(alpha=.1)  + geom_smooth(span=0.3)
+export$Baseload <- rep(digits[1],nrow(export))
+export %>% mutate(HeatingLoad = HDD * digits[2],CoolingLoad = CDD * digits[3]) %>% gather(LoadType,Load,12:14) %>% ggplot(aes(date,Load,color = LoadType)) + geom_point(alpha=.3) + geom_smooth(span=0.3) + theme(legend.position="bottom")
+
+```
+
+TMY 3 Usage:
+
+```{r TMY32,echo=FALSE}
+TMY3$hour <-( c(0, rep(1:(nrow(TMY3)-1))) + 1 )
+TMY3$Baseload <- rep(digits[1]/24,nrow(TMY3))
+
+TMY3 %>% mutate(HeatingLoad = digits[2]*ifelse(Fdg < setpoint,setpoint - Fdg,0)/24,CoolingLoad = digits[3]*ifelse(Fdg > setpoint,Fdg - setpoint,0)/24,HourlyLoad = Baseload + HeatingLoad + CoolingLoad) %>% ggplot(aes(hour,HourlyLoad)) + geom_point(alpha=.1) +geom_smooth()
+
+TMY3 %>% mutate(HeatingLoad = digits[2]*ifelse(Fdg < setpoint,setpoint - Fdg,0)/24,CoolingLoad = digits[3]*ifelse(Fdg > setpoint,Fdg - setpoint,0)/24) %>%  gather(LoadType,Load,3:5) %>% ggplot(aes(hour,Load,color = LoadType)) + geom_smooth()  + geom_point(alpha=.1) + theme(legend.position="bottom")
+
+```
+
+## Actual Residuals
+
+```{r residuals,echo=FALSE}
+
+export %>% mutate(HeatingLoad = HDD * digits[2],CoolingLoad = CDD * digits[3],Residual = Baseload + HeatingLoad + CoolingLoad - USAGE)  %>% ggplot(aes(date,Residual,group = 1)) + geom_point()
+
+```
