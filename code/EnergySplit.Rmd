@@ -10,11 +10,12 @@ library(stringr)
 library(broom)
 library(DT)
 
+#pull in energy data
 export <- read_csv("~/R/energy_split/data/ami_daily_2017-02-27.csv")
 export$date <- as.Date(floor_date(ymd_hms(export$UTC_START_TIME,tz="America/New_York"),unit="days"))
 export <- export %>% 
   select(-X1) %>% 
-  filter(date > '2016-01-01')
+  filter(date > '2016-01-01') # in this case habits changed around then, but there are no date limits for this, can have an issue if usage only increases or decreases with temperature, then it will throw an error when trying to split into both "heating" and "cooling"
 
 weather <- read_csv("~/R/energy_split/data/recentdatedweather.csv", 
     col_types = cols(CDD = col_double(), 
@@ -29,10 +30,13 @@ export <- inner_join(export,weather, c("date"="date"))
 
 ## Usage v. Temperature
 
-Having a variable for month of year or amount of sunshine would be more ideal.
+Having a variable for month and weekday would be more ideal helpful, but more complicated.
 
 ```{r chart,echo=FALSE}
-ggplot(export,aes(DryBulb,USAGE))+geom_point()+geom_rug(alpha=.3)+geom_smooth()
+ggplot(export,aes(DryBulb,USAGE))+
+  geom_point()+
+  geom_rug(alpha=.3)+
+  geom_smooth(se=F)
 ```
 
 ## Determine Setpoint
@@ -40,10 +44,11 @@ ggplot(export,aes(DryBulb,USAGE))+geom_point()+geom_rug(alpha=.3)+geom_smooth()
 The setpoint is determined by the temperature at the lowest value in the above chart. The assumed setpoint is:
 
 ```{r setpoint,echo=FALSE}
-p<-ggplot(export,aes(DryBulb,USAGE)) + geom_smooth()
-model_data <- ggplot_build(p)$data[[1]][,1:5] 
-setpoint <- model_data[order(model_data$y),][[1]][1]
-setpoint
+p <- ggplot(export,aes(DryBulb,USAGE)) + 
+      geom_smooth() #create smoothed line
+model_data <- ggplot_build(p)$data[[1]][,1:5] #export x/y of smoothed line
+setpoint <- model_data[order(model_data$y),][[1]][1] #get temp at lowest point
+setpoint #setpoint ends up being the lowest point of the smoothed line
 ```
 
 ## (Re)Calculate HDD & CDD
@@ -51,8 +56,11 @@ setpoint
 Then, run the ol' linear model.
 
 ```{r lm,echo=FALSE}
+#create HDD/CDD with new setpoint
 export$HDD = ifelse(export$DryBulb > setpoint, 0, setpoint - export$DryBulb)
 export$CDD = ifelse(export$DryBulb < setpoint, 0, export$DryBulb - setpoint)
+
+#get outputs of linear model
 digits <- tidy(lm(USAGE ~ HDD + CDD, export))[[2]]
 datatable(tidy(lm(USAGE ~ HDD + CDD, export)), options = list(dom = 't'))
 datatable(glance(lm(USAGE ~ HDD + CDD, export)), options = list(dom = 't'))
@@ -64,8 +72,10 @@ datatable(glance(lm(USAGE ~ HDD + CDD, export)), options = list(dom = 't'))
 Based on the above setpoint, TMY 3 has these HDDs and CDDs:
 
 ```{r HDDCDD,echo=FALSE}
+
 TMY3 <- read_csv("~/R/energy_split/data/TMY3.CSV")
 
+#create HDD/CDD for TMY3 based on above setpoint
 TMY3summary <- TMY3 %>% 
   mutate(HDH = ifelse(Fdg < setpoint,setpoint - Fdg,0),CDH = ifelse(Fdg > setpoint,Fdg - setpoint,0)) %>% 
   summarise(HDD = sum(HDH)/24,CDD = sum(CDH)/24)
@@ -76,6 +86,8 @@ TMY3summary
 Which, given our fit above leads to the following breakout (yearly load on top, percentage of total load on the bottom):
 
 ```{r breakout,echo=FALSE}
+#attempts to breakout yearly usage given model
+#so takes in temperature for the day and returns what the usage should have been
 usage <- data.frame(digits[1] * 365)
 colnames(usage)[1] <- 'Baseload'
 usage$HeatingLoad <- digits[2] * TMY3summary[[1]]
@@ -89,21 +101,39 @@ Actual Daily Usage:
 
 ```{r Actual,echo=FALSE}
 
-ggplot(export,aes(date,USAGE)) + geom_point(alpha=.1)  + geom_smooth(span=0.3)
+ggplot(export,aes(date,USAGE)) + 
+  geom_point(alpha=.1)  + 
+  geom_smooth(span=0.3,se=F)
 export$Baseload <- rep(digits[1],nrow(export))
-export %>% mutate(HeatingLoad = HDD * digits[2],CoolingLoad = CDD * digits[3]) %>% gather(LoadType,Load,12:14) %>% ggplot(aes(date,Load,color = LoadType)) + geom_point(alpha=.3) + geom_smooth(span=0.3) + theme(legend.position="bottom")
+export %>% 
+  mutate(HeatingLoad = HDD * digits[2],CoolingLoad = CDD * digits[3]) %>%
+  gather(LoadType,Load,12:14) %>% 
+  ggplot(aes(date,Load,color = LoadType)) + 
+    geom_point(alpha=.3) + geom_smooth(span=0.3) + 
+    theme(legend.position="bottom")
 
 ```
 
 TMY 3 Usage:
 
 ```{r TMY32,echo=FALSE}
+#what usage would have been given TMY 3 and modeled response to HDD and CDD
 TMY3$hour <-( c(0, rep(1:(nrow(TMY3)-1))) + 1 )
 TMY3$Baseload <- rep(digits[1]/24,nrow(TMY3))
 
-TMY3 %>% mutate(HeatingLoad = digits[2]*ifelse(Fdg < setpoint,setpoint - Fdg,0)/24,CoolingLoad = digits[3]*ifelse(Fdg > setpoint,Fdg - setpoint,0)/24,HourlyLoad = Baseload + HeatingLoad + CoolingLoad) %>% ggplot(aes(hour,HourlyLoad)) + geom_point(alpha=.1) +geom_smooth()
+TMY3 %>% 
+  mutate(HeatingLoad = digits[2]*ifelse(Fdg < setpoint,setpoint - Fdg,0)/24,CoolingLoad = digits[3]*ifelse(Fdg > setpoint,Fdg - setpoint,0)/24,HourlyLoad = Baseload + HeatingLoad + CoolingLoad) %>%
+  ggplot(aes(hour,HourlyLoad)) + 
+    geom_point(alpha=.1) +
+    geom_smooth()
 
-TMY3 %>% mutate(HeatingLoad = digits[2]*ifelse(Fdg < setpoint,setpoint - Fdg,0)/24,CoolingLoad = digits[3]*ifelse(Fdg > setpoint,Fdg - setpoint,0)/24) %>%  gather(LoadType,Load,3:5) %>% ggplot(aes(hour,Load,color = LoadType)) + geom_smooth()  + geom_point(alpha=.1) + theme(legend.position="bottom")
+TMY3 %>% 
+  mutate(HeatingLoad = digits[2]*ifelse(Fdg < setpoint,setpoint - Fdg,0)/24,CoolingLoad = digits[3]*ifelse(Fdg > setpoint,Fdg - setpoint,0)/24) %>%
+  gather(LoadType,Load,3:5) %>% 
+  ggplot(aes(hour,Load,color = LoadType)) +
+    geom_smooth(se=F) + 
+    geom_point(alpha=.1) + 
+    theme(legend.position="bottom")
 
 ```
 
@@ -111,6 +141,20 @@ TMY3 %>% mutate(HeatingLoad = digits[2]*ifelse(Fdg < setpoint,setpoint - Fdg,0)/
 
 ```{r residuals,echo=FALSE}
 
-export %>% mutate(HeatingLoad = HDD * digits[2],CoolingLoad = CDD * digits[3],Residual = Baseload + HeatingLoad + CoolingLoad - USAGE)  %>% ggplot(aes(date,Residual,group = 1)) + geom_point()
+#how bad is this model really?
+export %>% 
+  mutate(HeatingLoad = HDD * digits[2],CoolingLoad = CDD * digits[3],Residual = Baseload + HeatingLoad + CoolingLoad - USAGE)  %>% 
+  ggplot(aes(date,Residual,group = 1)) + 
+  geom_point()+
+  geom_hline(yintercept=0)
+
+
+#how bad is it by day of the week
+export %>% 
+  mutate(HeatingLoad = HDD * digits[2],CoolingLoad = CDD * digits[3],Residual = Baseload + HeatingLoad + CoolingLoad - USAGE)  %>% 
+  ggplot(aes(date,Residual,group = 1)) + 
+    geom_point() + 
+    facet_grid(wday(date,label = TRUE)~.)
+
 
 ```
