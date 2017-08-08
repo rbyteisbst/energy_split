@@ -11,3 +11,13 @@ export %>%
   ggplot(aes(x=USAGE,y=as.factor(month), fill=..x..))+
     geom_joy_gradient()+
     scale_fill_viridis()
+
+ami <- read_csv("data/ami_18594.csv") %>% 
+  mutate(date_time = ymd_hms(LOCAL_INTERVAL_TIME))
+
+ami %>% 
+  mutate(month = floor_date(date_time,unit = "months")) %>% 
+  ggplot(aes(x=KWH,y=as.factor(month), fill=..x..))+
+    geom_joy_gradient()+
+    scale_fill_viridis()+
+    scale_x_log10()
